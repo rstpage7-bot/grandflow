@@ -2,14 +2,14 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GradFlow | إدارة مشاريع التخرج</title>
+<title>NEXORA Business | إدارة الأعمال والمشروعات</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
-    <div class="brand"><div class="logo">G</div><div><b>GradFlow</b><small>إدارة مشاريع التخرج</small></div></div>
-    <div class="workspace"><small>مساحة العمل</small><b>مشروع فريق ممدوح</b><span>● نشط</span></div>
+    <div class="brand"><div class="logo">N</div><div><b>NEXORA</b><small>إدارة الأعمال والمشروعات</small></div></div>
+    <div class="workspace"><small>مساحة العمل</small><b>متجر نوفا التجاري</b><span>● نشط</span></div>
     <nav id="nav">
       <button class="nav active" data-page="overview">▦ <span>نظرة عامة</span></button>
       <button class="nav" data-page="project">▣ <span>مساحة المشروع</span></button>
@@ -18,15 +18,15 @@
       <button class="nav" data-page="defense">✓ <span>الاستعداد للمناقشة</span></button>
       <button class="nav" data-page="notes">✎ <span>ملاحظات التطبيق</span></button>
     </nav>
-    <div class="sidebar-foot"><div class="avatar">MM</div><div><b>ممدوح</b><small>مسؤول الفريق</small></div><button id="lang" title="Toggle language">EN</button></div>
+    <div class="sidebar-foot"><div class="avatar">NB</div><div><b>مدير المتجر</b><small>مدير مساحة العمل</small></div><button id="lang" title="Toggle language">EN</button></div>
   </aside>
   <main class="main">
     <header class="topbar"><div><small>مساحة الفريق / <span id="crumb">نظرة عامة</span></small><h1 id="pageTitle">نظرة عامة</h1></div><div class="top-actions"><span class="pill"><i></i> النسخة التجريبية</span><button class="icon-btn" id="exportBtn" title="تصدير البيانات">⇩</button><div class="avatar">MM</div></div></header>
-    <div id="content"></div>
-    <footer>GradFlow · نموذج تجريبي لإدارة مشاريع التخرج · يتم حفظ البيانات على هذا الجهاز</footer>
+    <section class="card auth-strip" style="margin-bottom:16px"><div class="card-head"><div><h2>مزامنة قاعدة البيانات</h2><small id="syncStatus">لم يتم ربط Supabase بعد. البيانات محفوظة محليًا.</small></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" id="supabaseSettings">إعداد Supabase</button><button class="btn primary" id="authButton">تسجيل الدخول</button></div></div><div id="authMessage" style="font-size:12px;color:#7b8799"></div></section><div id="content"></div>
+    <footer>NEXORA Business · نموذج تجريبي لإدارة الأعمال · يتم حفظ البيانات على هذا الجهاز</footer>
   </main>
 </div>
 <div class="toast" id="toast"></div>
 <dialog id="modal"><form method="dialog" id="modalForm"><div class="modal-head"><h2 id="modalTitle">إضافة</h2><button class="icon-btn" value="cancel">×</button></div><div id="modalBody"></div><div class="modal-actions"><button class="btn secondary" value="cancel">إلغاء</button><button class="btn primary" id="saveModal" value="default">حفظ</button></div></form></dialog>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body></html>
