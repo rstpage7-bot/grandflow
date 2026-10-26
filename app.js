@@ -1,93 +1,164 @@
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";\nconst $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const defaults={project:{name:"متجر نوفا التجاري",summary:"مساحة موحدة لمتابعة عمليات المتجر، والمهام، والتسليمات، وتحسين تجربة العملاء.",problem:"تشتت متابعة الطلبات والمهام التشغيلية والملاحظات بين أدوات متعددة.",goals:"تنظيم سير العمل التجاري، وتحديد المسؤوليات، ومتابعة التسليمات ومبادرات التحسين."},tasks:[],submissions:[],notes:[],checks:[false,false,false,false,false,false],events:[{text:"تم إعداد مساحة العمل التجارية",date:new Date().toLocaleDateString('ar-EG')}]};
-let data;try{data=JSON.parse(localStorage.getItem("gradflow_easy_v1"))||structuredClone(defaults)}catch{data=structuredClone(defaults)}
-let page="overview", english=false, modalAction=null;
-const labels={overview:["نظرة عامة","Overview"],project:["مساحة المشروع","Project space"],tasks:["المهام","Tasks"],submissions:["التسليمات والمراجعات","Submissions & reviews"],defense:["الاستعداد للمناقشة","Defense checklist"],notes:["ملاحظات التطبيق","App feedback"]};
-let supabase = null, currentUser = null, syncTimer = null;
-const savedUrl = localStorage.getItem("nexora_supabase_url") || "";
-const savedKey = localStorage.getItem("nexora_supabase_key") || "";
-function connectSupabase(url, key){
-  supabase = createClient(url, key);
-  $("#syncStatus").textContent = "Supabase متصل بالإعدادات، سجّل الدخول لمزامنة بياناتك.";
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const CONFIG_URL = "nexora_supabase_url";
+const CONFIG_KEY = "nexora_supabase_key";
+let client = null, authMode = "login", currentUser = null, profile = null, projects = [], toastTimer;
+
+$("#year").textContent = new Date().getFullYear();
+
+function toast(message) {
+  const el = $("#toast"); el.textContent = message; el.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
-async function save(){
-  localStorage.setItem("gradflow_easy_v1",JSON.stringify(data));
-  if(supabase && currentUser){
-    clearTimeout(syncTimer);
-    syncTimer=setTimeout(async()=>{
-      const {error}=await supabase.from("app_state").upsert({user_id:currentUser.id, id:"main", data:data, updated_at:new Date().toISOString()},{onConflict:"user_id,id"});
-      $("#syncStatus").textContent=error ? "تعذرت المزامنة: "+error.message : "تمت مزامنة بياناتك مع Supabase.";
-    },500);
+function message(selector, text, error=false) {
+  const el=$(selector); el.textContent=text; el.style.color=error?"#c34251":"";
+}
+function escapeHTML(value="") {
+  return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function configured() { return !!(localStorage.getItem(CONFIG_URL) && localStorage.getItem(CONFIG_KEY)); }
+function connect() {
+  if (!window.supabase?.createClient) throw new Error("تعذر تحميل مكتبة Supabase. تحقق من اتصال الإنترنت.");
+  const url=(localStorage.getItem(CONFIG_URL)||"").trim(), key=(localStorage.getItem(CONFIG_KEY)||"").trim();
+  if (!url || !key) throw new Error("أدخل رابط المشروع والمفتاح العام أولًا.");
+  client=window.supabase.createClient(url,key);
+  return client;
+}
+function setAuthUI(signedIn) {
+  $("#authView").classList.toggle("hidden",signedIn);
+  $("#appView").classList.toggle("hidden",!signedIn);
+  $("#logoutBtn").classList.toggle("hidden",!signedIn);
+  $("#userLabel").textContent=signedIn?(currentUser?.email||"مستخدم"):"غير مسجل الدخول";
+  $("#setupNotice").classList.toggle("hidden",configured());
+  $("#adminSection").classList.toggle("hidden", !(signedIn && profile?.role==="admin"));
+}
+async function refreshSession() {
+  if (!configured()) { currentUser=null; profile=null; setAuthUI(false); return; }
+  try {
+    connect();
+    const {data:{session},error}=await client.auth.getSession();
+    if(error) throw error;
+    currentUser=session?.user||null;
+    if(currentUser) { await loadProfile(); await loadProjects(); }
+    else { profile=null; projects=[]; }
+    setAuthUI(!!currentUser);
+    if(currentUser) renderProjects();
+  } catch(e) {
+    setAuthUI(false); message("#authMessage",e.message,true);
   }
 }
-async function loadRemote(){
-  if(!supabase || !currentUser) return;
-  $("#syncStatus").textContent="جارٍ تحميل بيانات حسابك...";
-  const {data:row,error}=await supabase.from("app_state").select("data").eq("user_id",currentUser.id).eq("id","main").maybeSingle();
-  if(error){$("#syncStatus").textContent="تعذر تحميل البيانات. راجع إعداد الجدول والسياسات.";return;}
-  if(row && row.data){data={...structuredClone(defaults),...row.data};save();render();$("#syncStatus").textContent="تم تحميل بيانات حسابك من Supabase.";}
-  else {await save();$("#syncStatus").textContent="تم إنشاء مساحة بيانات لحسابك.";}
+async function loadProfile() {
+  const {data,error}=await client.from("profiles").select("id,email,role").eq("id",currentUser.id).maybeSingle();
+  if(error) throw error;
+  profile=data||{id:currentUser.id,email:currentUser.email,role:"user"};
 }
-function refreshAuthUI(){
-  $("#authButton").textContent=currentUser?"تسجيل الخروج":"تسجيل الدخول";
-  $("#authMessage").textContent=currentUser?("تم تسجيل الدخول: "+currentUser.email):"سجّل الدخول بالبريد الإلكتروني وكلمة المرور لمزامنة بياناتك بين الأجهزة.";
-  if(!supabase) $("#syncStatus").textContent="لم يتم ربط Supabase بعد. البيانات محفوظة محليًا.";
+async function loadProjects() {
+  const {data,error}=await client.from("projects").select("id,name,description,status,due_date,created_at,owner_id,profiles(email)").order("created_at",{ascending:false});
+  if(error) throw error;
+  projects=data||[];
 }
-
-function esc(s=""){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function toast(t){let e=$("#toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),2300)}
-function doneCount(){return data.tasks.filter(t=>t.status==="مكتملة").length}
-function render(){let title=labels[page][english?1:0];$("#pageTitle").textContent=title;$("#crumb").textContent=title;$$(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===page));document.documentElement.dir=english?"ltr":"rtl";document.documentElement.lang=english?"en":"ar";$("#lang").textContent=english?"عربي":"EN";$("#content").innerHTML=({overview,project:projectPage,tasks:tasksPage,submissions:submissionsPage,defense:defensePage,notes:notesPage}[page])();wire()}
-function overview(){let n=data.tasks.length, d=doneCount(), r=data.submissions.filter(s=>s.status==="قيد المراجعة").length;let pct=n?Math.round(d/n*100):0;return `<div class="grid stats"><div class="card stat"><div><small>إجمالي المهام</small><strong>${n}</strong></div><div class="stat-icon">☷</div></div><div class="card stat"><div><small>المهام المكتملة</small><strong>${d}</strong></div><div class="stat-icon">✓</div></div><div class="card stat"><div><small>تسليمات تنتظر المراجعة</small><strong>${r}</strong></div><div class="stat-icon">⇧</div></div><div class="card stat"><div><small>ملاحظات التطبيق</small><strong>${data.notes.length}</strong></div><div class="stat-icon">✎</div></div></div>
-<div class="grid layout"><section class="card hero"><h2>${esc(data.project.name)}</h2><p>${esc(data.project.summary)}</p><div class="progress-head"><span>إنجاز المهام المسجلة</span><b>${pct}%</b></div><div class="progress"><span style="width:${pct}%"></span></div><div style="margin-top:22px"><button class="btn" style="background:#fff;color:#1b457f" data-go="project">فتح مساحة المشروع ←</button></div></section>
-<section class="card"><div class="card-head"><h2>آخر النشاطات</h2><button class="btn secondary" data-go="notes">الملاحظات</button></div><div class="list">${data.events.slice(-5).reverse().map(e=>`<div class="list-row"><div class="dot"></div><div class="meta"><b>${esc(e.text)}</b><small>${esc(e.date)}</small></div></div>`).join("")||'<div class="empty">لا توجد نشاطات بعد</div>'}</div></section>
-<section class="card"><div class="card-head"><h2>المهام الأخيرة</h2><button class="btn primary" data-action="add-task">+ إضافة مهمة</button></div><div class="list">${data.tasks.slice(-4).reverse().map(t=>`<div class="list-row"><div class="dot"></div><div class="meta"><b>${esc(t.title)}</b><small>${esc(t.owner||"بدون مسؤول")} · ${esc(t.due||"موعد غير محدد")}</small></div><span class="status ${t.status==="مكتملة"?"done":""}">${esc(t.status)}</span></div>`).join("")||'<div class="empty">ابدأ بإضافة أول مهمة للمشروع</div>'}</div></section>
-<section class="card"><h2>مسار العمل المقترح</h2>${["تخطيط العمل","تحليل السوق","خطة التشغيل","التنفيذ","التقييم والتحسين","التسليم ومراجعة الأداء"].map((s,i)=>`<div class="list-row"><div class="dot"></div><div class="meta"><b>${s}</b><small>المرحلة ${i+1}</small></div><span class="status">${i===0?"بداية":"لاحقًا"}</span></div>`).join("")}</section></div>`}
-function projectPage(){return `<div class="grid layout"><section class="card"><div class="card-head"><h2>ملف المشروع</h2><button class="btn primary" data-action="edit-project">تعديل المشروع</button></div><div class="field"><label>اسم المشروع</label><div>${esc(data.project.name)}</div></div><div class="field"><label>ملخص المشروع</label><div>${esc(data.project.summary)}</div></div><div class="field"><label>المشكلة</label><div>${esc(data.project.problem)}</div></div><div class="field"><label>الأهداف</label><div>${esc(data.project.goals)}</div></div></section><section class="card"><h2>الفريق والإشراف</h2><div class="list-row"><div class="avatar">MM</div><div class="meta"><b>مدير المشروع</b><small>مدير العمل</small></div></div><div class="list-row"><div class="avatar">DH</div><div class="meta"><b>فريق المبيعات</b><small>الفريق التجاري</small></div></div><div class="list-row"><div class="avatar">TM</div><div class="meta"><b>فريق التشغيل</b><small>الفريق التجاري</small></div></div><div class="note">يمكنك تعديل وصف المشروع وإضافة المهام. هذه نسخة تجريبية ولا تنشئ حسابات دخول حقيقية.</div></section></div>`}
-function tasksPage(){let groups=[["لم تبدأ","todo"],["قيد التنفيذ","doing"],["مكتملة","done"]];return `<div class="section-title"><div><h2>المهام وحالات التنفيذ</h2><p>حوّل خطة المشروع إلى أعمال واضحة يمكن متابعتها.</p></div><button class="btn primary" data-action="add-task">+ إضافة مهمة</button></div><div class="grid task-columns">${groups.map(([name,key])=>{let status=key==="todo"?"لم تبدأ":key==="doing"?"قيد التنفيذ":"مكتملة";return `<section class="task-column"><h3>${name}<span>${data.tasks.filter(t=>t.status===status).length}</span></h3>${data.tasks.filter(t=>t.status===status).map(t=>`<div class="task-card"><b>${esc(t.title)}</b><small>${esc(t.owner||"بدون مسؤول")} · ${esc(t.due||"بلا موعد")}</small><select data-status="${t.id}"><option ${t.status==="لم تبدأ"?"selected":""}>لم تبدأ</option><option ${t.status==="قيد التنفيذ"?"selected":""}>قيد التنفيذ</option><option ${t.status==="مكتملة"?"selected":""}>مكتملة</option></select><button class="btn outline" style="margin-top:8px" data-delete-task="${t.id}">حذف</button></div>`).join("")||'<div class="empty">لا توجد مهام</div>'}</section>`}).join("")}</div>`}
-function submissionsPage(){return `<div class="section-title"><div><h2>التسليمات والمراجعات</h2><p>سجّل عنوان التسليم ورابط الملف وحالة المراجعة.</p></div><button class="btn primary" data-action="add-submission">+ تسليم جديد</button></div><section class="card"><div class="table-wrap"><table><thead><tr><th>عنوان التسليم</th><th>المرحلة</th><th>الرابط</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>${data.submissions.map(s=>`<tr><td><b>${esc(s.title)}</b></td><td>${esc(s.stage)}</td><td>${s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener">فتح الرابط</a>`:"—"}</td><td><span class="status ${s.status==="معتمد"?"done":s.status==="قيد المراجعة"?"review":""}">${esc(s.status)}</span></td><td><select data-substatus="${s.id}"><option ${s.status==="قيد المراجعة"?"selected":""}>قيد المراجعة</option><option ${s.status==="معتمد"?"selected":""}>معتمد</option><option ${s.status==="يحتاج تعديل"?"selected":""}>يحتاج تعديل</option></select> <button class="btn outline" data-delete-sub="${s.id}">حذف</button></td></tr>`).join("")||`<tr><td colspan="5"><div class="empty">لا توجد تسليمات بعد. أضف أول تسليم لتبدأ.</div></td></tr>`}</tbody></table></div></section><div class="note">تنبيه: حالة «معتمد» هنا للتجربة والتنظيم الداخلي، وليست اعتمادًا رسميًا من الجامعة.</div>`}
-function defensePage(){let items=["التقرير النهائي","العرض التقديمي","رابط التطبيق وملفات المصدر","نتائج الاختبارات","معالجة ملاحظات المراجعة","تجربة العرض مع الفريق"];return `<div class="grid layout"><section class="card"><div class="card-head"><h2>قائمة الاستعداد للمناقشة</h2><span class="status done">${data.checks.filter(Boolean).length} / ${items.length}</span></div>${items.map((x,i)=>`<label class="check-row"><input type="checkbox" data-check="${i}" ${data.checks[i]?"checked":""}>${x}</label>`).join("")}</section><section class="card"><h2>ملخص الجاهزية</h2><div class="stat"><div><small>العناصر المكتملة</small><strong>${Math.round(data.checks.filter(Boolean).length/items.length*100)}%</strong></div><div class="stat-icon">✓</div></div><div class="progress" style="background:#e7edf6;margin-top:15px"><span style="width:${data.checks.filter(Boolean).length/items.length*100}%;background:var(--blue)"></span></div><button class="btn primary" style="margin-top:18px" data-action="print">طباعة ملخص المشروع</button><div class="note">هذه قائمة تنظيمية مقترحة، وليست قائمة متطلبات رسمية من الجامعة.</div></section></div>`}
-function notesPage(){return `<div class="section-title"><div><h2>ملاحظات التطبيق</h2><p>اجمع اقتراحات التحسين وتابع حالتها.</p></div><button class="btn primary" data-action="add-note">+ إضافة ملاحظة</button></div><section class="card"><div class="list">${data.notes.map(n=>`<div class="list-row"><div class="dot"></div><div class="meta"><b>${esc(n.text)}</b><small>${esc(n.priority)} · ${esc(n.date)}</small></div><select data-note-status="${n.id}"><option ${n.status==="جديدة"?"selected":""}>جديدة</option><option ${n.status==="قيد التخطيط"?"selected":""}>قيد التخطيط</option><option ${n.status==="تم تنفيذها"?"selected":""}>تم تنفيذها</option></select><button class="btn outline" data-delete-note="${n.id}">حذف</button></div>`).join("")||'<div class="empty">لا توجد ملاحظات حتى الآن</div>'}</div></section>`}
-function openModal(title,body,fn){$("#modalTitle").textContent=title;$("#modalBody").innerHTML=body;modalAction=fn;$("#modal").showModal()}
-function field(name,label,placeholder="",type="text",value=""){return `<div class="field"><label>${label}</label><input name="${name}" type="${type}" placeholder="${placeholder}" value="${esc(value)}" ${name==="title"||name==="name"?"required":""}></div>`}
-function wire(){$$("[data-go]").forEach(b=>b.onclick=()=>{page=b.dataset.go;render()});$$("[data-action]").forEach(b=>b.onclick=()=>actions(b.dataset.action));$$("[data-status]").forEach(s=>s.onchange=()=>{let t=data.tasks.find(t=>t.id==s.dataset.status);t.status=s.value;eventAdd("تم تحديث حالة المهمة: "+t.title);save();render()});$$("[data-substatus]").forEach(s=>s.onchange=()=>{let x=data.submissions.find(x=>x.id==s.dataset.substatus);x.status=s.value;eventAdd("تم تحديث حالة التسليم: "+x.title);save();render()});$$("[data-note-status]").forEach(s=>s.onchange=()=>{let x=data.notes.find(x=>x.id==s.dataset.noteStatus);x.status=s.value;save();render()});$$("[data-check]").forEach(c=>c.onchange=()=>{data.checks[+c.dataset.check]=c.checked;save();render()});$$("[data-delete-task]").forEach(b=>b.onclick=()=>removeItem("tasks",b.dataset.deleteTask));$$("[data-delete-sub]").forEach(b=>b.onclick=()=>removeItem("submissions",b.dataset.deleteSub));$$("[data-delete-note]").forEach(b=>b.onclick=()=>removeItem("notes",b.dataset.deleteNote))}
-function eventAdd(text){data.events.push({text,date:new Date().toLocaleDateString("ar-EG")});data.events=data.events.slice(-20)}
-function removeItem(key,id){data[key]=data[key].filter(x=>x.id!=id);save();render();toast("تم الحذف")}
-function actions(a){if(a==="add-task")openModal("إضافة مهمة",field("title","عنوان المهمة","مثال: إعداد مخطط قاعدة البيانات")+`<div class="two-fields">${field("owner","المسؤول","اسم الطالب")}${field("due","موعد الإنجاز","","date")}</div><div class="field"><label>المرحلة</label><select name="stage"><option>تخطيط العمل</option><option>تحليل السوق</option><option>خطة التشغيل</option><option>التنفيذ</option><option>التقييم والتحسين</option><option>التسليم ومراجعة الأداء</option></select></div>`,v=>{data.tasks.push({id:Date.now(),title:v.get("title"),owner:v.get("owner"),due:v.get("due"),stage:v.get("stage"),status:"لم تبدأ"});eventAdd("تمت إضافة مهمة: "+v.get("title"));finish("تمت إضافة المهمة")});
-if(a==="edit-project")openModal("تعديل المشروع",field("name","اسم المشروع","", "text",data.project.name)+`<div class="field"><label>الملخص</label><textarea name="summary" required>${esc(data.project.summary)}</textarea></div><div class="field"><label>المشكلة</label><textarea name="problem">${esc(data.project.problem)}</textarea></div><div class="field"><label>الأهداف</label><textarea name="goals">${esc(data.project.goals)}</textarea></div>`,v=>{data.project={name:v.get("name"),summary:v.get("summary"),problem:v.get("problem"),goals:v.get("goals")};eventAdd("تم تعديل ملف المشروع");finish("تم حفظ بيانات المشروع")});
-if(a==="add-submission")openModal("تسجيل تسليم جديد",field("title","عنوان التسليم","مثال: تحليل المتطلبات")+`<div class="field"><label>المرحلة</label><select name="stage"><option>تخطيط العمل</option><option>تحليل السوق</option><option>خطة التشغيل</option><option>التنفيذ</option><option>التقييم والتحسين</option><option>التسليم ومراجعة الأداء</option></select></div>`+field("url","رابط الملف (اختياري)","https://...","url"),v=>{data.submissions.push({id:Date.now(),title:v.get("title"),stage:v.get("stage"),url:v.get("url"),status:"قيد المراجعة"});eventAdd("تم تسجيل تسليم: "+v.get("title"));finish("تم تسجيل التسليم")});
-if(a==="add-note")openModal("إضافة ملاحظة",`<div class="field"><label>الملاحظة</label><textarea name="text" required placeholder="اكتب اقتراح التحسين بوضوح"></textarea></div><div class="field"><label>الأولوية</label><select name="priority"><option>متوسطة</option><option>عالية</option><option>تحسين مقترح</option></select></div>`,v=>{data.notes.push({id:Date.now(),text:v.get("text"),priority:v.get("priority"),status:"جديدة",date:new Date().toLocaleDateString("ar-EG")});eventAdd("تمت إضافة ملاحظة للتطبيق");finish("تم حفظ الملاحظة")});
-if(a==="print"){window.print()}}
-function finish(msg){save();$("#modal").close();render();toast(msg)}
-$("#modalForm").addEventListener("submit",e=>{e.preventDefault();if(!modalAction)return;modalAction(new FormData(e.currentTarget))});
-$("#nav").addEventListener("click",e=>{let b=e.target.closest("[data-page]");if(b){page=b.dataset.page;render()}});
-$("#lang").onclick=()=>{english=!english;render()};
-$("#exportBtn").onclick=()=>{let blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="gradflow-backup.json";a.click();URL.revokeObjectURL(url);toast("تم تصدير نسخة احتياطية")};
-
-async function authFlow(){
-  if(!supabase){openSupabaseSettings();return;}
-  if(currentUser){await supabase.auth.signOut();currentUser=null;refreshAuthUI();toast("تم تسجيل الخروج");return;}
-  openModal("تسجيل الدخول إلى NEXORA",field("email","البريد الإلكتروني","you@example.com","email")+field("password","كلمة المرور","8 أحرف على الأقل","password")+`<div class="note">أنشئ الحساب أولًا من إعدادات Authentication في Supabase أو استخدم خيار إنشاء حساب أدناه.</div><button type="button" class="btn secondary" id="signupBtn">إنشاء حساب جديد</button>`,async v=>{
-    const {data:res,error}=await supabase.auth.signInWithPassword({email:v.get("email"),password:v.get("password")});
-    if(error){toast("تعذر تسجيل الدخول: "+error.message);return;}
-    currentUser=res.user;await loadRemote();refreshAuthUI();$("#modal").close();toast("تم تسجيل الدخول");
-  });
-  setTimeout(()=>{const b=$("#signupBtn");if(b)b.onclick=async()=>{const f=$("#modalForm");const v=new FormData(f);const {data:res,error}=await supabase.auth.signUp({email:v.get("email"),password:v.get("password")});if(error){toast("تعذر إنشاء الحساب: "+error.message);return;}toast("تم إنشاء الحساب. افحص بريدك إذا طُلب تأكيده.");};},0);
+function statusClass(status) { return status==="مكتمل"?"done":status==="متوقف"?"paused":""; }
+function renderProjects() {
+  const query=($("#searchProjects").value||"").trim().toLowerCase();
+  const list=projects.filter(p=>(p.name+" "+(p.description||"")).toLowerCase().includes(query));
+  $("#statTotal").textContent=projects.length;
+  $("#statActive").textContent=projects.filter(p=>p.status==="قيد التنفيذ").length;
+  $("#statDone").textContent=projects.filter(p=>p.status==="مكتمل").length;
+  $("#projectGrid").innerHTML=list.length?list.map(p=>`
+    <article class="project-card">
+      <div class="project-top"><h3>${escapeHTML(p.name)}</h3><span class="status ${statusClass(p.status)}">${escapeHTML(p.status)}</span></div>
+      <p>${escapeHTML(p.description||"لا يوجد وصف مضاف لهذا المشروع.")}</p>
+      <div class="project-meta"><span>${p.due_date?"التسليم: "+escapeHTML(p.due_date):"بدون موعد تسليم"}</span><span>${new Date(p.created_at).toLocaleDateString("ar-EG")}</span></div>
+      <div class="project-actions"><button class="mini-btn" data-edit="${p.id}">تعديل</button><button class="mini-btn danger" data-delete="${p.id}">حذف</button></div>
+    </article>`).join(""):`<div class="empty">لا توجد مشاريع مطابقة. ابدأ بإنشاء مشروع جديد.</div>`;
+  $("#projectGrid").querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>editProject(b.dataset.edit)));
+  $("#projectGrid").querySelectorAll("[data-delete]").forEach(b=>b.addEventListener("click",()=>deleteProject(b.dataset.delete)));
+  if(profile?.role==="admin") renderAdmin();
 }
-function openSupabaseSettings(){
-  const d=$("#supabaseModal"), f=$("#supabaseForm");
-  f.elements.supabaseUrl.value=localStorage.getItem("nexora_supabase_url")||"";
-  f.elements.supabaseKey.value=localStorage.getItem("nexora_supabase_key")||"";
-  d.showModal();
+function renderAdmin() {
+  const q=($("#adminSearch").value||"").toLowerCase().trim(), st=$("#adminStatus").value;
+  const list=projects.filter(p=>(p.name+" "+(p.description||"")+" "+(p.profiles?.email||"")).toLowerCase().includes(q)&&(!st||p.status===st));
+  $("#adminProjects").innerHTML=list.length?list.map(p=>`<tr><td><strong>${escapeHTML(p.name)}</strong><br><span class="muted">${escapeHTML(p.description||"")}</span></td><td>${escapeHTML(p.profiles?.email||"مستخدم")}</td><td><span class="status ${statusClass(p.status)}">${escapeHTML(p.status)}</span></td><td>${new Date(p.created_at).toLocaleDateString("ar-EG")}</td><td><button class="mini-btn" data-admin-edit="${p.id}">تعديل</button> <button class="mini-btn danger" data-admin-delete="${p.id}">حذف</button></td></tr>`).join(""):`<tr><td colspan="5">لا توجد مشاريع.</td></tr>`;
+  $("#adminProjects").querySelectorAll("[data-admin-edit]").forEach(b=>b.addEventListener("click",()=>editProject(b.dataset.adminEdit)));
+  $("#adminProjects").querySelectorAll("[data-admin-delete]").forEach(b=>b.addEventListener("click",()=>deleteProject(b.dataset.adminDelete)));
 }
-$("#supabaseSettings").onclick=openSupabaseSettings;
-$("#supabaseForm").addEventListener("submit",e=>{
-  e.preventDefault();const fd=new FormData(e.currentTarget),url=String(fd.get("supabaseUrl")).trim(),key=String(fd.get("supabaseKey")).trim();
-  localStorage.setItem("nexora_supabase_url",url);localStorage.setItem("nexora_supabase_key",key);
-  try{connectSupabase(url,key);$("#supabaseModal").close();refreshAuthUI();toast("تم حفظ إعدادات Supabase");}
-  catch(err){toast("تعذر الاتصال. راجع الرابط والمفتاح.");}
+function openProject(project=null) {
+  $("#projectForm").reset(); $("#projectId").value=project?.id||"";
+  $("#projectDialogTitle").textContent=project?"تعديل المشروع":"مشروع جديد";
+  $("#projectName").value=project?.name||""; $("#projectDescription").value=project?.description||"";
+  $("#projectStatus").value=project?.status||"مخطط"; $("#projectDue").value=project?.due_date||"";
+  $("#projectTasks").value=(project?.tasks||[]).map(t=>t.title).join("\n");
+  message("#projectMessage",""); $("#projectDialog").showModal();
+}
+function editProject(id) { const p=projects.find(x=>x.id===id); if(p) openProject(p); }
+async function saveProject(event) {
+  event.preventDefault(); if(!client||!currentUser) return;
+  const id=$("#projectId").value;
+  const payload={name:$("#projectName").value.trim(),description:$("#projectDescription").value.trim(),status:$("#projectStatus").value,due_date:$("#projectDue").value||null};
+  if(!payload.name) return message("#projectMessage","اسم المشروع مطلوب.",true);
+  try {
+    let result;
+    if(id) result=await client.from("projects").update(payload).eq("id",id).select().single();
+    else result=await client.from("projects").insert({...payload,owner_id:currentUser.id}).select().single();
+    if(result.error) throw result.error;
+    const projectId=result.data.id;
+    const taskLines=$("#projectTasks").value.split("\n").map(s=>s.trim()).filter(Boolean);
+    const {error:deleteError}=await client.from("tasks").delete().eq("project_id",projectId);
+    if(deleteError) throw deleteError;
+    if(taskLines.length) {
+      const {error:taskError}=await client.from("tasks").insert(taskLines.map(title=>({project_id:projectId,title,owner_id:currentUser.id})));
+      if(taskError) throw taskError;
+    }
+    $("#projectDialog").close(); await loadProjects(); renderProjects(); toast(id?"تم تحديث المشروع":"تم إنشاء المشروع");
+  } catch(e) { message("#projectMessage",friendlyError(e),true); }
+}
+async function deleteProject(id) {
+  const p=projects.find(x=>x.id===id); if(!p||!confirm(`هل تريد حذف المشروع «${p.name}»؟`)) return;
+  try {
+    const {error}=await client.from("projects").delete().eq("id",id); if(error) throw error;
+    await loadProjects(); renderProjects(); toast("تم حذف المشروع");
+  } catch(e) { toast(friendlyError(e)); }
+}
+function friendlyError(e) {
+  const s=e?.message||String(e);
+  if(s.includes("profiles")) return "جدول profiles غير جاهز. شغّل ملف supabase.sql كاملًا.";
+  if(s.includes("projects")||s.includes("tasks")||s.includes("schema cache")) return "تأكد من تشغيل ملف supabase.sql وتحديث الصفحة.";
+  if(s.includes("Invalid login credentials")) return "البريد أو كلمة المرور غير صحيحة.";
+  return s;
+}
+function chooseAuth(mode) {
+  authMode=mode; $$(".tab").forEach(b=>b.classList.toggle("active",b.dataset.auth===mode));
+  $("#authSubmit").textContent=mode==="login"?"دخول إلى مساحة العمل":"إنشاء الحساب";
+  $("#password").autocomplete=mode==="login"?"current-password":"new-password";
+  message("#authMessage","");
+}
+$("#authForm").addEventListener("submit",async e=>{
+  e.preventDefault(); message("#authMessage","جارٍ الاتصال...");
+  try {
+    if(!configured()) throw new Error("افتح إعدادات الربط وأدخل بيانات Supabase.");
+    connect(); const email=$("#email").value.trim(),password=$("#password").value;
+    const result=authMode==="login"?await client.auth.signInWithPassword({email,password}):await client.auth.signUp({email,password});
+    if(result.error) throw result.error;
+    if(authMode==="signup"&&!result.data.session) message("#authMessage","تم إنشاء الحساب. راجع بريدك لتأكيد التسجيل، ثم سجّل الدخول.");
+    else { message("#authMessage","تم تسجيل الدخول."); await refreshSession(); }
+  } catch(e) { message("#authMessage",friendlyError(e),true); }
 });
-$("#authButton").onclick=authFlow;
-if(savedUrl && savedKey){try{connectSupabase(savedUrl,savedKey);supabase.auth.getSession().then(({data:res})=>{currentUser=res.session?.user||null;refreshAuthUI();if(currentUser)loadRemote();});}catch(e){}}
-refreshAuthUI();
-render();
+$("#logoutBtn").addEventListener("click",async()=>{try{await client.auth.signOut();currentUser=null;profile=null;projects=[];setAuthUI(false);toast("تم تسجيل الخروج");}catch(e){toast(e.message)}});
+$$("[data-auth]").forEach(b=>b.addEventListener("click",()=>chooseAuth(b.dataset.auth)));
+$("#newProjectBtn").addEventListener("click",()=>openProject());
+$("#projectForm").addEventListener("submit",saveProject);
+$("#searchProjects").addEventListener("input",renderProjects);
+$("#adminSearch").addEventListener("input",renderAdmin); $("#adminStatus").addEventListener("change",renderAdmin);
+$("#settingsBtn").addEventListener("click",()=>{ $("#supabaseUrl").value=localStorage.getItem(CONFIG_URL)||""; $("#supabaseKey").value=localStorage.getItem(CONFIG_KEY)||""; message("#settingsMessage",""); $("#settingsDialog").showModal(); });
+$("#settingsForm").addEventListener("submit",async e=>{
+  e.preventDefault(); const url=$("#supabaseUrl").value.trim().replace(/\/+$/,""),key=$("#supabaseKey").value.trim();
+  try {
+    if(!url.startsWith("https://")||!url.includes(".supabase.co")) throw new Error("أدخل رابط Supabase صحيحًا.");
+    if(!key) throw new Error("المفتاح العام مطلوب.");
+    localStorage.setItem(CONFIG_URL,url);localStorage.setItem(CONFIG_KEY,key);connect();
+    const {error}=await client.auth.getSession(); if(error) throw error;
+    $("#settingsDialog").close(); toast("تم حفظ الإعدادات"); await refreshSession();
+  } catch(e) { message("#settingsMessage",e.message,true); }
+});
+$$("[data-close]").forEach(b=>b.addEventListener("click",()=>$("#"+b.dataset.close).close()));
+window.addEventListener("DOMContentLoaded",refreshSession);
